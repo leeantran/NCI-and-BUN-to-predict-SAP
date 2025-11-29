@@ -6,7 +6,7 @@ format:
     fig-align: center
     fig-format: jpeg
     fig-height: 5
-    fig-width: 9
+    fig-width: 7
 execute:
   echo: false
   warning: false
@@ -34,6 +34,8 @@ library(rpart)
 library(rpart.plot)
 library(janitor)
 library(caret)
+library(ggcorrplot)
+source("function.R")
 
 train <- read_xlsx("train.xlsx")
 test <- read_xlsx("test.xlsx", sheet = "FILE BAO CAO")
@@ -128,9 +130,8 @@ test$dataset  <- "Test"
 
 df <- full_join(train, test)
 
-cols <- c("sex", "sap", "pe", "bisap", "lv_bisap", "etiology",
-          "hbp", "diabetes", "pseudocyst", "necrosis", "fluid",
-          "necrosis_wall", "mortality", "ctsi")
+cols <- c("sex", "sap", "pe", "lv_bisap", "etiology",
+          "hbp", "diabetes", "pseudocyst", "necrosis", "fluid", "necrosis_wall", "mortality")
 df[cols] <- lapply(df[cols], as.factor)
 ```
 
@@ -158,89 +159,93 @@ tbl_summary(
   add_overall()
 ```
 
-### Training dataset
-
-```{r}
-#| message: false
-#| warning: false
-tbl_train <- tbl_summary(
-  train,
-  by = sap,
-  include = everything(),
-  missing = "no",
-  digits = c(all_continuous() ~ 1, all_categorical() ~ c(0, 1)),
-  statistic =  list(all_continuous() ~ "{median} ({p25}-{p75})")
-) %>%
-  add_p(
-    pvalue_fun = function(x)
-      style_pvalue(x, digits = 3),
-    test = list(
-      all_continuous() ~ "wilcox.test",
-      all_categorical() ~ "fisher.test"
-    )
-  ) %>%
-  add_overall()
-```
-
-### Testing dataset
-
-```{r}
-#| message: false
-#| warning: false
-tbl_test <- tbl_summary(
-  test,
-  by = sap,
-  include = everything(),
-  missing = "no",
-  digits = c(all_continuous() ~ 1, all_categorical() ~ c(0, 1)),
-  statistic =  list(all_continuous() ~ "{median} ({p25}-{p75})")
-) %>%
-  add_p(
-    pvalue_fun = function(x)
-      style_pvalue(x, digits = 3),
-    test = list(
-      all_continuous() ~ "wilcox.test",
-      all_categorical() ~ "fisher.test"
-    )
-  ) %>%
-  add_overall()
-```
-
-```{r}
-tbl_merge(list(tbl_train, tbl_test),
-          tab_spanner = c("Training dataset", "Testing dataset"))
-```
-
 ## Distribution plots
 
 ```{r}
 df_long <- df %>%
-  pivot_longer(cols = c(nci, bun),
+  pivot_longer(cols = c(nci, bun, lym, wbc, hct, lipase, neu, cre, amylase),
                names_to = "variable",
                values_to = "value")
-```
 
-```{r}
 label_vars <- c(
   nci = "NCI",
-  bun = "BUN"
+  bun = "BUN",
+  lym = "Lym",
+  wbc = "WBC", 
+  lipase = "Lipase",
+  neu = "Neu",
+  hct = "HCT",
+  cre = "Creatinine",
+  amylase = "Amylase"
 )
 
-ggplot(df_long, aes(x = sap, y = value, fill = sap)) +
-  geom_violin(trim = FALSE, alpha = 0.5) +
-  geom_boxplot(width = 0.15, outlier.shape = NA) +
-  facet_grid(variable ~ dataset,
-             scales = "free_y",
-             labeller = labeller(variable = label_vars)) +
-  theme_bw() +
-  labs(x = "Severity of Acute Pancreatitis", 
-       y = "Values", fill = "SAP group") +
-  theme(strip.background = element_rect(fill = "lightblue"),
-        axis.text.x = element_blank(),
-        axis.text.y = element_text(color = "black", 
-                                   size = 10),
-        strip.text = element_text(color = "black",
-                                  size = 10))
+ggplot(df_long, aes(x = value, fill = sap)) +
+  geom_density(alpha = 0.4) +
+  scale_fill_discrete(
+    name = "SAP status",
+    labels = c("0" = "Non SAP", "1" = "SAP")) +
+      facet_wrap(
+        ~ variable,
+        scales = "free",
+        ncol = 3,
+        labeller = labeller(variable = label_vars)
+      ) +
+    scale_y_continuous(labels = scales::label_number(accuracy = 0.001)) +
+  labs(x = "Values", y = "Density", fill = "") +
+      theme_bw() +
+      theme(strip.background = element_rect(fill = "lightblue"),
+            legend.position = "bottom",
+            axis.title = element_text(size = 16,
+                                      color = "black",
+                                      face = "bold"),
+            axis.text = element_text(size = 13,
+                                     color = "black"),
+            strip.text = element_text(size = 14,
+                                      color = "black")
+      )
+```
+
+## Heatmap
+
+```{r}
+df_pairs <- df %>%
+  select(nci, bun, bisap, lym, wbc, hct, lipase, neu, cre, amylase, tri, ctsi) %>% 
+  rename(
+    "NCI" = nci,
+    "BUN" = bun,
+    "BISAP" = bisap,
+    "Lym" = lym,     
+    "WBC" = wbc,
+    "HCT" = hct,
+    "Lipase" = lipase,  
+    "Neu" = neu,     
+    "Creatinine" = cre,
+    "Amylase" = amylase,
+    "Triglyceride" = tri,
+    "CTSI" = ctsi
+  )
+
+corr_matrix <- cor(df_pairs, 
+                   method = "spearman", 
+                   use = "pairwise.complete.obs")
+
+ggcorrplot(corr_matrix, 
+           method = "square",       
+           type = "lower",         
+           lab = TRUE,              
+           lab_size = 3,            
+           p.mat = cor_pmat(df_pairs), 
+           sig.level = 0.05,       
+           insig = "blank",         
+           hc.order = TRUE,    
+           colors = c("#6D9EC1", "white", "#E46726"), 
+           ggtheme = theme_bw()) +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 12, color = "black"),
+    axis.text.y = element_text(size = 12, color = "black"),
+    legend.text = element_text(size = 14, color = "black")
+  ) +
+  labs(x = "", y = "")
 ```
 
 ## Build models
@@ -248,10 +253,9 @@ ggplot(df_long, aes(x = sap, y = value, fill = sap)) +
 ### Train models
 
 ```{r}
-train$sap <- factor(train$sap, levels = c(0,1), 
+set.seed(234)
+df$sap <- factor(df$sap, levels = c(0,1), 
                     labels = c("nonsap", "sap"))
-test$sap <- factor(test$sap, levels = c(0,1), 
-                   labels = c("nonsap", "sap"))
 
 ## Cross validation
 kfold <- trainControl(method = "cv",
@@ -259,29 +263,33 @@ kfold <- trainControl(method = "cv",
                       savePredictions = "all",
                       classProbs = TRUE) 
 
-m1 <- train(sap ~ nci, data = train,
-               method = "glm", family = "binomial",
-               trControl = kfold) ## Logistic regression
+m1 <- train(sap ~ nci, data = df,
+            method = "glm", family = "binomial",
+            trControl = kfold) ## Logistic regression
 
-m2 <- train(sap ~ bun, data = train, 
-               method = "glm", family = "binomial",
-               trControl = kfold) ## Logistic regression
+m2 <- train(sap ~ bun, data = df,
+            method = "glm", family = "binomial",
+            trControl = kfold) ## Logistic regression
 
 m3 <- rpart(
   sap ~ nci + bun,
-  data = train,
+  data = df,
   control = rpart.control(cp = 0.0001, xval = 5)
 ) ## Decision tree
+
+m4 <- train(sap ~ bisap, data = df,
+            method = "glm", family = "binomial",
+            trControl = kfold) ## Logistic regression
 ```
 
 ### Fit models
 
 ```{r}
-m1_prob <- predict(m1, test, type = "prob")
-m1_roc <- roc(test$sap, m1_prob[,2]) ## Logistic regression
+m1_prob <- predict(m1, df, type = "prob")
+m1_roc <- roc(df$sap, m1_prob[,2]) 
 
-m2_prob <- predict(m2, test, type = "prob")
-m2_roc <- roc(test$sap, m2_prob[,2]) ## Logistic regression
+m2_prob <- predict(m2, df, type = "prob")
+m2_roc <- roc(df$sap, m2_prob[,2]) 
 
 ## Decision tree
 bestcp <- m3$cptable[which.min(m3$cptable[,"xerror"]), "CP"]
@@ -295,10 +303,14 @@ prp(tree_m3,
     roundint=FALSE, 
     digits=4)
 
-m3_roc <- predict(tree_m3, test, type="prob")[,2]
+m3_pred <- predict(tree_m3, df, type="prob")[,2]
+m3_roc <- roc(df$sap, m3_pred)
+
+m4_prob <- predict(m4, df, type = "prob")
+m4_roc <- roc(df$sap, m4_prob[,2])
 ```
 
-### ROC Curve
+### ROC Curves
 
 ```{r}
 size_text_roc <- 4
@@ -308,25 +320,154 @@ roc.list <- list(m1_roc, m2_roc, m3_roc)
 ggroc(roc.list, aes = "color", size = 1, linetype = "solid", legacy.axes = TRUE) +
     annotate("text", x = x_text_roc, y = y_text_roc, size = size_text_roc, hjust = 0, 
              color = "#1f77b4",
-             label = paste0("NCI = ", sprintf("%.3f", roc_nlr$auc))) +
+             label = paste0("NCI = ", sprintf("%.3f", m1_roc$auc))) +
     annotate("text", x = x_text_roc, y = y_text_roc - 0.1, size = size_text_roc, hjust = 0, 
              color = "#ff7f0e",
-             label = paste0("BUN = ", sprintf("%.3f", roc_crp$auc))) +
+             label = paste0("BUN = ", sprintf("%.3f", m2_roc$auc))) +
     annotate("text", x = x_text_roc, y = y_text_roc - 0.2, size = size_text_roc, hjust = 0, 
              color = "#d340a2",
-             label = paste0("NCI + BUN = ", sprintf("%.3f", roc_nlr_crp$auc))) +
+             label = paste0("NCI + BUN = ", sprintf("%.3f", m3_roc$auc))) +
     geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1),
                  color = "darkgrey", linetype = "dashed", size = 0.8) +  # Đường y=x
     theme_classic() +
-    theme(text = element_text(size = 14),
-          legend.position = "bottom",
-          legend.title = element_blank()) +
-    scale_color_bmj(name = "Model", 
+    theme(text = element_text(size = 16),
+          legend.position = "none",
+          legend.title = element_blank(),
+          legend.text = element_text(size = 18,
+                                     color = "black"),
+          axis.text = element_text(size = 18,
+                                   color = "black"),
+          axis.title = element_text(size = 20,
+                                   color = "black")) +
+    scale_color_bmj(name = "Models", 
 labels = c("NCI", "BUN", "NCI + BUN")) +
-    labs(x = "1 - Specificity", y = "Sensitivity") +
-    theme_minimal()
+    labs(x = "1 - Specificity", y = "Sensitivity")
 ```
 
+### Compare ROC curves
 
+```{r}
+roc.test(m1_roc,m2_roc)
+roc.test(m3_roc,m2_roc)
+roc.test(m1_roc,m3_roc)
+```
 
+### Cut-off
+
+```{r}
+### NCI alone
+cp_nci <- cutpointr::cutpointr(data = df, x = nci, class = sap, metric = cutpointr::youden)
+summary(cp_nci)
+
+cp_bun <- cutpointr::cutpointr(data = df, x = bun, class = sap, metric = cutpointr::youden)
+summary(cp_bun)
+```
+
+## Calculate metrics
+
+```{r}
+rets <- c("threshold", "specificity", "sensitivity", "accuracy", "npv", "ppv")
+
+ci.coords(m1_roc, x = "best", ret = rets)
+
+ci.coords(m2_roc, x = "best", ret = rets, 
+          best.policy = "random")
+
+ci.coords(m3_roc, x = "best", ret = rets)
+```
+
+## Odds Ratios
+
+```{r}
+df$sap <- ifelse(df$sap=="nonsap", 0, 1)
+
+dff <- df[,c("nci", "bun", "sap", "age", "sex", 
+               "etiology", "diabetes", "wbc")]
+
+dff <- dff %>% 
+  mutate(
+    nci_or = ifelse(nci>=cp_nci$optimal_cutpoint,1,0),
+    bun_or = ifelse(bun>=cp_bun$optimal_cutpoint,1,0),
+    combine_or = case_when(
+      nci >= 17.36 ~ 1,
+      TRUE ~ 0)
+  )
+
+dff <- dff %>% mutate(across(.cols = -c(nci, age, wbc), .fns = as.factor))
+
+# Univariate 
+tbl_uvregression(dff[,-c(1,2,4,5,6,7,8)],
+                 method = glm,
+                 y = sap,
+                 method.args = list(family = binomial),
+                 exponentiate = TRUE)
+
+## Multivariate - adjusted for age, sex, etiology, diabetes, wbc
+glm(sap ~ nci_or + age + sex + etiology + diabetes + wbc,
+    data = dff, family = binomial(link = "logit")) %>%
+  tbl_regression(exponentiate = TRUE)
+
+glm(sap ~ bun_or + age + sex + etiology + diabetes + wbc,
+    data = dff, family = binomial(link = "logit")) %>%
+  tbl_regression(exponentiate = TRUE)
+
+glm(sap ~ combine_or + age + sex + etiology + diabetes + wbc,
+    data = dff, family = binomial(link = "logit")) %>%
+  tbl_regression(exponentiate = TRUE)
+```
+
+## Compare BISAP
+
+### ROC Curves
+
+```{r}
+size_text_roc <- 4
+x_text_roc <- 0.65
+y_text_roc <- 0.25
+roc.list <- list(m3_roc, m4_roc)
+ggroc(roc.list, aes = "color", size = 1, linetype = "solid", legacy.axes = TRUE) +
+    annotate("text", x = x_text_roc, y = y_text_roc, size = size_text_roc, hjust = 0, 
+             color = "#1f77b4",
+             label = paste0("NCI + BUN = ", sprintf("%.3f", m3_roc$auc))) +
+    annotate("text", x = x_text_roc, y = y_text_roc - 0.1, size = size_text_roc, hjust = 0, 
+             color = "#ff7f0e",
+             label = paste0("BISAP = ", sprintf("%.3f", m4_roc$auc))) +
+    geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1),
+                 color = "darkgrey", linetype = "dashed", size = 0.8) +  # Đường y=x
+    theme_classic() +
+    theme(text = element_text(size = 16),
+          legend.position = "none",
+          legend.title = element_blank(),
+          legend.text = element_text(size = 18,
+                                     color = "black"),
+          axis.text = element_text(size = 18,
+                                   color = "black"),
+          axis.title = element_text(size = 20,
+                                   color = "black")) +
+    scale_color_bmj(name = "Models", 
+labels = c("NCI + BUN", "BISAP")) +
+    labs(x = "1 - Specificity", y = "Sensitivity")
+```
+
+### Roc test
+
+```{r}
+roc.test(m3_roc, m4_roc)
+```
+
+## Decision curves
+
+```{r}
+df_plot <- df[,c("sap","nci","bun","bisap")]
+df_plot <- na.omit(df_plot)
+pred1 <- predict(m3, newdata = df_plot, type = 'prob')
+pred2 <- predict(m4, newdata = df_plot, type = 'prob')
+df_plot$pred1 <- pred1[,2]
+df_plot$pred2 <- pred2[,2]
+df_plot$sap <- as.numeric(df_plot$sap) - 1
+dca(sap ~ pred1 + pred2,
+    data = df_plot,
+    label = list(pred1 = "NCI + BUN",
+                 pred2 = "BISAP"))
+```
 
