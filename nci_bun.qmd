@@ -2,7 +2,7 @@
 title: "NCI and BUN for predicting SAP patients"
 format:
   docx:
-    fig-dpi: 800
+    fig-dpi: 600
     fig-align: center
     fig-format: jpeg
     fig-height: 5
@@ -11,6 +11,10 @@ execute:
   echo: false
   warning: false
   message: false
+  fig-path:
+knitr:
+  opts_chunk:
+    fig.path: "figures/"
 ---
 
 ```{r}
@@ -35,10 +39,9 @@ library(rpart.plot)
 library(janitor)
 library(caret)
 library(ggcorrplot)
-source("function.R")
 
-train <- read_xlsx("train.xlsx")
-test <- read_xlsx("test.xlsx", sheet = "FILE BAO CAO")
+train <- read_xlsx("data/train.xlsx")
+test <- read_xlsx("data/test.xlsx", sheet = "FILE BAO CAO")
 ```
 
 ## Process data
@@ -50,10 +53,9 @@ test <- test %>% clean_names()
 ## Training dataset
 train <- train %>%
   mutate(
-    sap = ifelse(mucdonang2==1, 0, 1), #1 Nặng, 0 Không nặng
+    sap = ifelse(mucdonang2==1, 1, 0), #1 Nặng, 0 Không nặng
     sex = ifelse(gioi=="Nam", "Male", "Female"),
     pe = ifelse(trandichmangphoi=="có", "Yes", "No"),
-    nci = neutrophilvvx109l * creatininvv,
     bun = bu_nvv,
     lv_bisap = ifelse(diem_bisap>=3, ">=3", "<3"),
     etiology = case_when(
@@ -76,25 +78,26 @@ train <- train %>%
          hct = hc_tvv,
          lipase = lipasevv,
          neu = neutrophilvvx109l,
+         plt = tieucauvv_gl,
          cre = creatininvv,
+         crp = cr_pvv,
          amylase = amlasevv,
          tri = trygliceridvv,
          ctsi = d_iem_ctsi) %>% 
-  select(sap, sex, age, pe, nci, bun, bisap, lv_bisap, etiology, 
+  select(sap, sex, age, pe, bun, bisap, lv_bisap, etiology,
          hbp, diabetes, pseudocyst, necrosis, fluid, necrosis_wall,
          mortality, lym, wbc, hct, lipase, neu, cre, amylase,
-         tri, ctsi)
+         tri, ctsi, crp, plt)
 
 ## Testing dataset
 test <- test %>% 
   mutate(
-    sap = ifelse(mucdonang=="NẶNG", 1, 0), #1 Nặng, 0 Không nặng
+    sap = ifelse(mucdonang=="NẶNG", 1, 0),
     sex = ifelse(gioi=="Nam", "Male", "Female"),
     pe = case_when(
       xq_trandichmangphoi %in% c("có", "Có") ~ "Yes",
       TRUE ~ "No"
     ),
-    nci = neuvv * cls_creatininvv,
     bun = cls_bunvv,
     lv_bisap = ifelse(bisap>=3, ">=3", "<3"),
     etiology = case_when(
@@ -116,22 +119,102 @@ test <- test %>%
          hct = cls_hct_vv,
          lipase = cls_lipasevv,
          neu = neuvv,
+         plt = cls_pl_tvv,
          cre = cls_creatininvv,
+         crp = cr_pvv,
          amylase = cls_amylasevv,
          tri = cls_triglyceridvv,
          ctsi = diem_ctsi) %>% 
-  select(sap, sex, age, pe, nci, bun, bisap, lv_bisap, etiology, 
+  select(sap, sex, age, pe, bun, bisap, lv_bisap, etiology, 
          hbp, diabetes, pseudocyst, necrosis, fluid, necrosis_wall,
          mortality, lym, wbc, hct, lipase, neu, cre, amylase,
-         tri, ctsi)
+         tri, ctsi, crp, plt)
+```
 
-train$dataset <- "Train"
-test$dataset  <- "Test"
+```{r}
+external <- read_excel("data/external.xls")
 
-df <- full_join(train, test)
+external <- external %>% 
+  mutate(etiology = case_when(
+           nguyennhan == 1 ~ "Triglycerid",
+           nguyennhan == 2 ~ "Alcohol",
+           nguyennhan == 3 ~ "Gallstones",
+           TRUE ~ "Unknown"
+         ),
+         lv_bisap = case_when(
+           lvbisap == 0 ~ "<3",
+           TRUE ~ ">=3"
+         ),
+         sex = case_when(
+           gioi == 0 ~ "Female",
+           TRUE ~ "Male"
+         ),
+         pe = case_when(
+           tdmp == 0 ~ "No",
+           TRUE ~ "Yes"
+         ),
+         hbp = case_when(
+           tha == 0 ~ "No",
+           TRUE ~ "Yes"
+         ),
+         diabetes = case_when(
+           dtd == 0 ~ "No",
+           TRUE ~ "Yes"
+         ),
+         pseudocyst = case_when(
+           nanggia == 0 ~ "No",
+           TRUE ~ "Yes"
+         ),
+         necrosis = case_when(
+           hoaitutuy == 0 ~ "No",
+           TRUE ~ "Yes"
+         ),
+         fluid = case_when(
+           tudich == 0 ~ "No",
+           TRUE ~ "Yes"
+         ),
+         necrosis_wall = case_when(
+           hoaituwall == 0 ~ "No",
+           TRUE ~ "Yes"
+         ),
+         mortality = case_when(
+           ketcuoc == 0 ~ "No",
+           TRUE ~ "Yes"
+         )) %>% 
+  rename(age = tuoi,
+         sap = phando2) %>% 
+  select(sap, sex, age, pe, bun, bisap, lv_bisap, etiology, 
+         hbp, diabetes, pseudocyst, necrosis, fluid, necrosis_wall,
+         mortality, lym, wbc, hct, lipase, neu, cre, amylase,
+         tri, ctsi, crp, plt) 
+
+external <- external[1:100,]
+```
+
+```{r}
+df <- rbind(train, test, external)
+
+df <- df %>% 
+  mutate(nci = neu*cre,
+         neu_crp = neu*crp,
+         plr = plt/lym,
+         nlr = neu/lym
+         )
+
+set.seed(123)
+train_index <- createDataPartition(y = df$sap, p = 0.7, list = FALSE)
+
+train <- df[train_index, ]
+test <- df[-train_index, ]
+
+train$type <- "Train"
+test$type  <- "Test"
+
+df <- rbind(train,test)
 
 cols <- c("sex", "sap", "pe", "lv_bisap", "etiology",
-          "hbp", "diabetes", "pseudocyst", "necrosis", "fluid", "necrosis_wall", "mortality")
+          "hbp", "diabetes", "pseudocyst", "necrosis", "fluid", "necrosis_wall", "mortality", "type")
+
 df[cols] <- lapply(df[cols], as.factor)
 ```
 
@@ -142,6 +225,28 @@ df[cols] <- lapply(df[cols], as.factor)
 ```{r}
 tbl_summary(
   df,
+  by = type,
+  include = everything(),
+  missing = "no",
+  digits = c(all_continuous() ~ 1, all_categorical() ~ c(0, 1)),
+  statistic =  list(all_continuous() ~ "{median} ({p25}-{p75})")
+) %>%
+  add_p(
+    pvalue_fun = function(x)
+      style_pvalue(x, digits = 3),
+    test = list(
+      all_continuous() ~ "wilcox.test",
+      all_categorical() ~ "fisher.test"
+    )
+  ) %>%
+  add_overall()
+```
+
+### Train by SAP
+
+```{r}
+tbl_summary(
+  train,
   by = sap,
   include = everything(),
   missing = "no",
@@ -163,66 +268,73 @@ tbl_summary(
 
 ```{r}
 df_long <- df %>%
-  pivot_longer(cols = c(nci, bun, lym, wbc, hct, lipase, neu, cre, amylase),
+  pivot_longer(cols = c(nci, neu_crp, plr, nlr, bun, lym, wbc, neu, hct, cre, crp, plt),
                names_to = "variable",
                values_to = "value")
 
 label_vars <- c(
   nci = "NCI",
+  neu_crp = "NCr",
+  plr = "PLR",
+  nlr = "NLR",
   bun = "BUN",
   lym = "Lym",
   wbc = "WBC", 
-  lipase = "Lipase",
   neu = "Neu",
   hct = "HCT",
-  cre = "Creatinine",
-  amylase = "Amylase"
+  cre = "CRE",
+  crp = "CRP",
+  plt = "PLT"
 )
 
-ggplot(df_long, aes(x = value, fill = sap)) +
-  geom_density(alpha = 0.4) +
-  scale_fill_discrete(
-    name = "SAP status",
-    labels = c("0" = "Non SAP", "1" = "SAP")) +
-      facet_wrap(
-        ~ variable,
-        scales = "free",
-        ncol = 3,
-        labeller = labeller(variable = label_vars)
-      ) +
-    scale_y_continuous(labels = scales::label_number(accuracy = 0.001)) +
-  labs(x = "Values", y = "Density", fill = "") +
-      theme_bw() +
-      theme(strip.background = element_rect(fill = "lightblue"),
-            legend.position = "bottom",
-            axis.title = element_text(size = 16,
-                                      color = "black",
-                                      face = "bold"),
-            axis.text = element_text(size = 13,
-                                     color = "black"),
-            strip.text = element_text(size = 14,
-                                      color = "black")
-      )
+ggplot(df_long, aes(x = as.factor(sap), y = value, fill = as.factor(sap))) +
+  geom_violin(trim = FALSE) +
+  geom_boxplot(width = 0.1,       
+               fill = "white",    
+               color = "black",   
+               alpha = 0.8,       
+               outlier.size = 0.5) + 
+scale_fill_manual(
+    name = "",
+    labels = c("0" = "Non SAP", "1" = "SAP"),
+    values = c("0" = "#2E86C1", "1" = "#F39C12")
+  ) +
+  facet_wrap(
+    ~ variable,
+    scales = "free_y", 
+    ncol = 4,
+    labeller = labeller(variable = label_vars)
+  ) +
+  labs(x = "", y = "Values", fill = "") +
+  theme_bw() +
+  theme(
+    strip.background = element_rect(fill = "lightblue"),
+    legend.position = "bottom",
+    axis.title = element_text(size = 16, color = "black", face = "bold"),
+    axis.text = element_text(size = 13, color = "black"),
+    axis.text.x = element_blank(),
+    strip.text = element_text(size = 14, color = "black")
+  )
 ```
 
 ## Heatmap
 
 ```{r}
 df_pairs <- df %>%
-  select(nci, bun, bisap, lym, wbc, hct, lipase, neu, cre, amylase, tri, ctsi) %>% 
+  select(nci, neu_crp, plr, nlr, bun, lym, wbc, neu, hct, cre, crp, plt) %>% 
   rename(
     "NCI" = nci,
+    "NCr" = neu_crp,
+    "PLR" = plr,
+    "NLR" = nlr,
     "BUN" = bun,
-    "BISAP" = bisap,
-    "Lym" = lym,     
+    "Lym" = lym,
     "WBC" = wbc,
+    "Neu" = neu, 
     "HCT" = hct,
-    "Lipase" = lipase,  
-    "Neu" = neu,     
     "Creatinine" = cre,
-    "Amylase" = amylase,
-    "Triglyceride" = tri,
-    "CTSI" = ctsi
+    "CRP" = crp,
+    "PLT" = plt
   )
 
 corr_matrix <- cor(df_pairs, 
@@ -239,7 +351,7 @@ ggcorrplot(corr_matrix,
            insig = "blank",         
            hc.order = TRUE,    
            colors = c("#6D9EC1", "white", "#E46726"), 
-           ggtheme = theme_bw()) +
+           ggtheme = ggplot2::theme_dark()) +
   theme(
     axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 12, color = "black"),
     axis.text.y = element_text(size = 12, color = "black"),
@@ -254,8 +366,8 @@ ggcorrplot(corr_matrix,
 
 ```{r}
 set.seed(234)
-df$sap <- factor(df$sap, levels = c(0,1), 
-                    labels = c("nonsap", "sap"))
+train$sap <- factor(train$sap, levels = c(0, 1), labels = c("nonsap", "sap"))
+test$sap <- factor(test$sap, levels = c(0, 1), labels = c("nonsap", "sap"))
 
 ## Cross validation
 kfold <- trainControl(method = "cv",
@@ -263,21 +375,25 @@ kfold <- trainControl(method = "cv",
                       savePredictions = "all",
                       classProbs = TRUE) 
 
-m1 <- train(sap ~ nci, data = df,
+m1 <- train(sap ~ nci, data = train,
             method = "glm", family = "binomial",
             trControl = kfold) ## Logistic regression
 
-m2 <- train(sap ~ bun, data = df,
+m2 <- train(sap ~ hct, data = train,
             method = "glm", family = "binomial",
             trControl = kfold) ## Logistic regression
 
 m3 <- rpart(
-  sap ~ nci + bun,
-  data = df,
-  control = rpart.control(cp = 0.0001, xval = 5)
+  sap ~ nci + hct,
+  data = train,
+  control = rpart.control(cp = 0.0001,
+                          maxdepth = 2,
+                          minsplit = 2, 
+                          minbucket = 3, 
+                          xval = 10)
 ) ## Decision tree
 
-m4 <- train(sap ~ bisap, data = df,
+m4 <- train(sap ~ bisap, data = train,
             method = "glm", family = "binomial",
             trControl = kfold) ## Logistic regression
 ```
@@ -285,29 +401,23 @@ m4 <- train(sap ~ bisap, data = df,
 ### Fit models
 
 ```{r}
-m1_prob <- predict(m1, df, type = "prob")
-m1_roc <- roc(df$sap, m1_prob[,2]) 
+m1_prob <- predict(m1, test, type = "prob")
+m1_roc <- roc(test$sap, m1_prob[,2]) 
 
-m2_prob <- predict(m2, df, type = "prob")
-m2_roc <- roc(df$sap, m2_prob[,2]) 
+m2_prob <- predict(m2, test, type = "prob")
+m2_roc <- roc(test$sap, m2_prob[,2]) 
 
 ## Decision tree
-bestcp <- m3$cptable[which.min(m3$cptable[,"xerror"]), "CP"]
-tree_m3 <- prune(m3, cp = bestcp)
-prp(tree_m3, 
-    faclen=0, 
-    extra=101, 
-    under=TRUE, 
-    cex=0.8,
-    box.palette="auto", 
-    roundint=FALSE, 
-    digits=4)
+m3_pruned <- prune(m3, cp = m3$cptable[2])
 
-m3_pred <- predict(tree_m3, df, type="prob")[,2]
-m3_roc <- roc(df$sap, m3_pred)
+prp(m3_pruned, extra = 101, nn = TRUE, 
+    fallen.leaves = TRUE)
 
-m4_prob <- predict(m4, df, type = "prob")
-m4_roc <- roc(df$sap, m4_prob[,2])
+m3_pred <- predict(m3, test, type="prob")[,2]
+m3_roc <- roc(test$sap, m3_pred)
+
+m4_prob <- predict(m4, test, type = "prob")
+m4_roc <- roc(test$sap, m4_prob[,2])
 ```
 
 ### ROC Curves
@@ -323,10 +433,10 @@ ggroc(roc.list, aes = "color", size = 1, linetype = "solid", legacy.axes = TRUE)
              label = paste0("NCI = ", sprintf("%.3f", m1_roc$auc))) +
     annotate("text", x = x_text_roc, y = y_text_roc - 0.1, size = size_text_roc, hjust = 0, 
              color = "#ff7f0e",
-             label = paste0("BUN = ", sprintf("%.3f", m2_roc$auc))) +
+             label = paste0("HCT = ", sprintf("%.3f", m2_roc$auc))) +
     annotate("text", x = x_text_roc, y = y_text_roc - 0.2, size = size_text_roc, hjust = 0, 
              color = "#d340a2",
-             label = paste0("NCI + BUN = ", sprintf("%.3f", m3_roc$auc))) +
+             label = paste0("NCI + HCT = ", sprintf("%.3f", m3_roc$auc))) +
     geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1),
                  color = "darkgrey", linetype = "dashed", size = 0.8) +  # Đường y=x
     theme_classic() +
@@ -340,14 +450,13 @@ ggroc(roc.list, aes = "color", size = 1, linetype = "solid", legacy.axes = TRUE)
           axis.title = element_text(size = 20,
                                    color = "black")) +
     scale_color_bmj(name = "Models", 
-labels = c("NCI", "BUN", "NCI + BUN")) +
+labels = c("NCI", "BUN", "NCI + HCT")) +
     labs(x = "1 - Specificity", y = "Sensitivity")
 ```
 
 ### Compare ROC curves
 
 ```{r}
-roc.test(m1_roc,m2_roc)
 roc.test(m3_roc,m2_roc)
 roc.test(m1_roc,m3_roc)
 ```
@@ -355,12 +464,11 @@ roc.test(m1_roc,m3_roc)
 ### Cut-off
 
 ```{r}
-### NCI alone
-cp_nci <- cutpointr::cutpointr(data = df, x = nci, class = sap, metric = cutpointr::youden)
+cp_nci <- cutpointr::cutpointr(data = train, x = nci, class = sap, metric = cutpointr::youden)
 summary(cp_nci)
 
-cp_bun <- cutpointr::cutpointr(data = df, x = bun, class = sap, metric = cutpointr::youden)
-summary(cp_bun)
+cp_hct <- cutpointr::cutpointr(data = train, x = hct, class = sap, metric = cutpointr::youden)
+summary(cp_hct)
 ```
 
 ## Calculate metrics
@@ -379,18 +487,23 @@ ci.coords(m3_roc, x = "best", ret = rets)
 ## Odds Ratios
 
 ```{r}
-df$sap <- ifelse(df$sap=="nonsap", 0, 1)
+train$sap <- ifelse(train$sap=="nonsap", 0, 1)
 
-dff <- df[,c("nci", "bun", "sap", "age", "sex", 
+dff <- train[,c("nci", "hct", "sap", "age", "sex", 
                "etiology", "diabetes", "wbc")]
 
 dff <- dff %>% 
   mutate(
     nci_or = ifelse(nci>=cp_nci$optimal_cutpoint,1,0),
-    bun_or = ifelse(bun>=cp_bun$optimal_cutpoint,1,0),
-    combine_or = case_when(
-      nci >= 17.36 ~ 1,
-      TRUE ~ 0)
+    hct_or = ifelse(hct>=cp_hct$optimal_cutpoint,1,0),
+    combine_or = factor(
+  case_when(
+    nci < 9.6 ~ "Low",
+    nci >= 9.6 & hct < 45 ~ "Intermediate",
+    nci >= 9.6 & hct >= 45  ~ "High"
+  ),
+  levels = c("Low", "Intermediate", "High")
+)
   )
 
 dff <- dff %>% mutate(across(.cols = -c(nci, age, wbc), .fns = as.factor))
@@ -407,7 +520,7 @@ glm(sap ~ nci_or + age + sex + etiology + diabetes + wbc,
     data = dff, family = binomial(link = "logit")) %>%
   tbl_regression(exponentiate = TRUE)
 
-glm(sap ~ bun_or + age + sex + etiology + diabetes + wbc,
+glm(sap ~ hct_or + age + sex + etiology + diabetes + wbc,
     data = dff, family = binomial(link = "logit")) %>%
   tbl_regression(exponentiate = TRUE)
 
@@ -428,7 +541,7 @@ roc.list <- list(m3_roc, m4_roc)
 ggroc(roc.list, aes = "color", size = 1, linetype = "solid", legacy.axes = TRUE) +
     annotate("text", x = x_text_roc, y = y_text_roc, size = size_text_roc, hjust = 0, 
              color = "#1f77b4",
-             label = paste0("NCI + BUN = ", sprintf("%.3f", m3_roc$auc))) +
+             label = paste0("NCI + HCT = ", sprintf("%.3f", m3_roc$auc))) +
     annotate("text", x = x_text_roc, y = y_text_roc - 0.1, size = size_text_roc, hjust = 0, 
              color = "#ff7f0e",
              label = paste0("BISAP = ", sprintf("%.3f", m4_roc$auc))) +
@@ -445,7 +558,7 @@ ggroc(roc.list, aes = "color", size = 1, linetype = "solid", legacy.axes = TRUE)
           axis.title = element_text(size = 20,
                                    color = "black")) +
     scale_color_bmj(name = "Models", 
-labels = c("NCI + BUN", "BISAP")) +
+labels = c("NCI + HCT", "BISAP")) +
     labs(x = "1 - Specificity", y = "Sensitivity")
 ```
 
@@ -458,7 +571,7 @@ roc.test(m3_roc, m4_roc)
 ## Decision curves
 
 ```{r}
-df_plot <- df[,c("sap","nci","bun","bisap")]
+df_plot <- train[,c("sap","nci","hct","bisap")]
 df_plot <- na.omit(df_plot)
 pred1 <- predict(m3, newdata = df_plot, type = 'prob')
 pred2 <- predict(m4, newdata = df_plot, type = 'prob')
@@ -467,7 +580,14 @@ df_plot$pred2 <- pred2[,2]
 df_plot$sap <- as.numeric(df_plot$sap) - 1
 dca(sap ~ pred1 + pred2,
     data = df_plot,
-    label = list(pred1 = "NCI + BUN",
+    label = list(pred1 = "NCI + HCT",
                  pred2 = "BISAP"))
 ```
+
+
+
+
+
+
+
 
