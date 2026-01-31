@@ -389,6 +389,78 @@ ggcorrplot(corr_matrix,
   labs(x = "", y = "")
 ```
 
+## VIF
+
+```{r}
+vif_val <- vif(m1$finalModel)
+
+vif_df <- data.frame(
+  Variable = names(vif_val),
+  VIF = as.numeric(vif_val)
+)
+
+vif_df <- vif_df %>% 
+  mutate(Variable = case_when(
+    Variable == "bun_clean" ~ "BUN",
+    Variable == "wbc" ~ "WBC",
+    TRUE ~ "CRP"
+  ))
+
+ggplot(vif_df, aes(x = reorder(Variable, VIF), y = VIF)) +
+  geom_col(width = 0.6, fill = "#4E84C4", alpha = 0.9) + 
+  geom_hline(yintercept = 2, linetype = "dashed", color = "red", size = 0.8) + 
+  coord_flip() + 
+  theme_bw(base_size = 14) + 
+  labs(
+    x = NULL,
+    y = "Variance Inflation Factor (VIF)"
+  ) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray30"),
+    axis.text = element_text(color = "black")
+  ) +
+
+  geom_text(aes(label = round(VIF, 2)), hjust = -0.2, size = 4) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+```
+
+## SHAP value
+
+```{r}
+X_shap <- train %>% select(bun_clean, wbc, crp) 
+
+pfun <- function(object, newdata) {
+  predict(object, newdata = newdata, type = "prob")[, 2] 
+}
+
+shap_raw <- explain(m1, X = X_shap, pred_wrapper = pfun, nsim = 100)
+
+shp_viz <- shapviz(shap_raw, X = X_shap)
+
+names(shp_viz$X) <- c("BUN", "WBC", "CRP")
+
+colnames(shp_viz$S) <- c("BUN", "WBC", "CRP")
+
+sv_importance(shp_viz, kind = "beeswarm") +
+  theme_bw(base_size = 14) + 
+  scale_color_gradient(low = "#3A0CA3", high = "#F72585", 
+                       name = "Feature Value") + 
+  labs(
+    x = "SHAP values",
+    y = NULL
+  ) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") + 
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    legend.position = "right",
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(color = "black")
+  )
+```
+
 ## Build models
 
 ### Train models
@@ -580,16 +652,30 @@ options(datadist = "dd")
 fit_final <- lrm(sap ~ bun_clean + wbc + crp, 
                  data = train, x = TRUE, y = TRUE)
 
-my_cuts <- c(0.01, 0.05, seq(0.1, 0.9, by = 0.1), 0.95, 0.99, 0.999)
+my_cuts <- c(0.01, 0.05, seq(0.1, 0.9, by = 0.2), 0.95, 0.99, 0.999)
 
 nom <- nomogram(fit_final, 
                 fun = plogis,
                 fun.at = my_cuts, # Dùng dải mốc mới này
                 lp = FALSE, 
-                funlabel = "Nguy cơ diễn tiến SAP")
+                funlabel = "Risk of Severe Acute Pancreatitis")
 
 # Vẽ lại
 plot(nom, xfrac=.35, cex.axis=0.8, lwd=2)
+```
+
+## Calibration combined model
+
+```{r}
+y_test_numeric <- as.numeric(test$sap) - 1 
+pred_probs_test <- predict(fit_final, newdata = test, type = "fitted")
+
+validation_plot <- val.prob(p = pred_probs_test, 
+                            y = y_test_numeric, 
+                            m = 20,
+                            cex = 0.8,       
+                            xlab = "Predicted Probability",
+                            ylab = "Observed Proportion")
 ```
 
 ## Compare BISAP
