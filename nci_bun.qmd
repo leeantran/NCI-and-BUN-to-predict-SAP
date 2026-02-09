@@ -676,17 +676,118 @@ roc.test(roc_m1, roc_m5, method="bootstrap", boot.n=1000)
 ## Decision curves
 
 ```{r}
-df_plot <- test[,c("sap","bun_clean","wbc", "crp", "bisap")]
+df_plot <- test[,c("sap","bun_clean","wbc", "crp")]
 df_plot <- na.omit(df_plot)
 pred1 <- predict(m1, newdata = df_plot, type = 'prob')
-pred2 <- predict(m5, newdata = df_plot, type = 'prob')
 df_plot$pred1 <- pred1[,2]
-df_plot$pred2 <- pred2[,2]
 df_plot$sap <- as.numeric(df_plot$sap) - 1
-dca(sap ~ pred1 + pred2,
+dca_obj <- dca(sap ~ pred1,
     data = df_plot,
-    label = list(pred1 = "BUN + WBC + CRP",
-                 pred2 = "BISAP"))
+    label = list(pred1 = "BUN + WBC + CRP"))
+
+dca_df <- dca_obj$dca  %>%
+  select(variable, threshold, net_benefit)
+
+benefit_bar_df <- function(df, bar_start = -0.02, bar_width = 0.015,
+                           x_min = NULL, x_max = NULL,
+                           strict = FALSE, tol = 1e-8) {
+  
+  vars <- unique(df$variable)
+  var_all  <- vars[grep("^all$", vars, ignore.case = TRUE)][1]
+  var_none <- vars[grep("^none$", vars, ignore.case = TRUE)][1]
+  var_model <- setdiff(vars, c(var_all, var_none))[1] 
+
+  w <- df |>
+    select(threshold, variable, net_benefit) |>
+    pivot_wider(names_from = variable, values_from = net_benefit) |>
+    arrange(threshold) |>
+    distinct(threshold, .keep_all = TRUE) |>
+    rename(a = !!var_all, n = !!var_none, f = !!var_model)
+
+  t <- w$threshold; a <- w$a; n <- w$n; f <- w$f
+  
+  if (is.null(x_min)) x_min <- min(t, na.rm = TRUE)
+  if (is.null(x_max)) x_max <- max(t, na.rm = TRUE)
+
+  inter <- function(x, y1, y2) {
+    out <- numeric(0)
+    for (i in seq_len(length(x) - 1)) {
+      x0 <- x[i]; x1 <- x[i + 1]
+      if (x1 < x_min || x0 > x_max) next
+      d0 <- y1[i] - y2[i]; d1 <- y1[i + 1] - y2[i + 1]
+      if (!is.finite(d0) || !is.finite(d1)) next
+      if (d0 * d1 <= 0) {
+        denom <- (y1[i + 1] - y1[i]) - (y2[i + 1] - y2[i])
+        cand <- if (denom == 0) c(x0, x1) else x0 + (y2[i] - y1[i]) * (x1 - x0) / denom
+        out <- c(out, cand)
+      }
+    }
+    sort(unique(out[out >= x_min & out <= x_max & is.finite(out)]))
+  }
+
+  br <- sort(unique(c(x_min, inter(t,f,a), inter(t,f,n), inter(t,a,n), x_max)))
+
+  mids <- (br[-length(br)] + br[-1]) / 2
+  
+  fm <- approx(t, f, xout = mids, rule = 2)$y
+  am <- approx(t, a, xout = mids, rule = 2)$y
+  nm <- approx(t, n, xout = mids, rule = 2)$y
+  
+  comp <- if (strict) `>` else `>=`
+  
+  win <- comp(fm, am) & comp(fm, nm)
+
+  out <- tibble(
+    threshold_start = br[-length(br)],
+    threshold_end   = br[-1],
+    benefit         = ifelse(win, "Benefit", "No Benefit"), 
+    bar_start       = bar_start,
+    bar_width       = bar_width
+  ) |>
+    filter(threshold_end - threshold_start > tol) |>
+    arrange(threshold_start) |>
+    mutate(grp = cumsum(benefit != lag(benefit, default = first(benefit))) ) |>
+    group_by(grp, benefit) |>
+    summarise(
+      threshold_start = min(threshold_start),
+      threshold_end   = max(threshold_end),
+      bar_start       = first(bar_start),
+      bar_width       = first(bar_width),
+      .groups = "drop"
+    )
+
+  out
+}
+
+bar_df <- benefit_bar_df(dca_df, x_min = 0, x_max = 1) 
+
+bar_df_lab <- bar_df %>% 
+    dplyr::mutate(
+        x = (threshold_start + threshold_end) / 2,
+        y = bar_start - bar_width / 2,
+        label = ifelse(benefit == "Benefit", "Benefit", NA)
+    )
+
+plot(dca_obj) +
+  
+    coord_cartesian(xlim = c(0, 1), ylim = c(-0.035, 0.23), expand = FALSE) +
+    
+    geom_rect(data = bar_df,
+              aes(xmin = threshold_start, xmax = threshold_end, 
+                  ymin = bar_start - bar_width, ymax = bar_start, 
+                  fill = benefit), 
+              inherit.aes = FALSE, show.legend = FALSE) +
+    geom_text(
+        data = bar_df_lab,
+        aes(x = x, y = y, label = label),
+        inherit.aes = FALSE,
+        fontface = "bold", size = 3.5, vjust = 0.5, hjust = 0.5,
+        color = "white", check_overlap = TRUE
+    ) +
+
+    scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_fill_manual(values = c("Benefit" = "#00BFC4", "No Benefit" = "#F8766D")) +
+    theme_classic()
 ```
 
 
